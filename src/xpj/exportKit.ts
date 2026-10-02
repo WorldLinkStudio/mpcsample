@@ -10,6 +10,7 @@
 
 import { type AsyncZipOptions, zip } from "fflate";
 import type { SampleKit } from "../kits/kit.types";
+import type { Pattern } from "../sequencer/sequencer.types";
 import { buildXpj } from "./buildXpj";
 import { loadTemplate } from "./codec";
 
@@ -105,9 +106,10 @@ export async function buildProjectArtifacts(
   opts: {
     signal?: AbortSignal;
     onProgress?: (p: ExportProgress) => void;
+    pattern?: Pattern;
   } = {},
 ): Promise<ProjectArtifacts> {
-  const { signal, onProgress } = opts;
+  const { signal, onProgress, pattern } = opts;
 
   // ── Validation ───────────────────────────────────────────────────────────
   if (kit.pads.length === 0) {
@@ -174,7 +176,7 @@ export async function buildProjectArtifacts(
 
   onProgress?.({ phase: "building", loaded: total, total });
 
-  const built = buildXpj(await loadTemplate(), kit, padBytes);
+  const built = buildXpj(await loadTemplate(), kit, padBytes, pattern);
 
   return {
     projectName: built.projectName,
@@ -200,11 +202,12 @@ export async function exportKitToZip(
   opts: {
     signal?: AbortSignal;
     onProgress?: (p: ExportProgress) => void;
+    pattern?: Pattern;
   } = {},
 ): Promise<ExportResult> {
-  const { signal, onProgress } = opts;
+  const { signal, onProgress, pattern } = opts;
 
-  const built = await buildProjectArtifacts(kit, userSamples, { signal, onProgress });
+  const built = await buildProjectArtifacts(kit, userSamples, { signal, onProgress, pattern });
 
   // ── Phase: zipping ────────────────────────────────────────────────────────
   if (signal?.aborted) {

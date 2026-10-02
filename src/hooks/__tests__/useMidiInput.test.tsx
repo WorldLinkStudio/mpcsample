@@ -39,6 +39,7 @@ function resetStore() {
   useMPCStore.setState({
     midiStatus: "idle",
     midiDeviceName: null,
+    bankIdx: 0,
     pads: (() => {
       const p: Record<number, string> = {};
       for (let i = 0; i < 16; i++) p[i] = "armed";
@@ -92,22 +93,42 @@ describe("useMidiInput", () => {
     expect(mockStop).toHaveBeenCalledTimes(1);
   });
 
-  it("onEvent noteOn → store.triggerPad called with padIdx + velocity", () => {
+  it("onEvent noteOn → store.triggerPad called with padIdx + velocity, fromHardware=true", () => {
     renderHook(() => useMidiInput());
     const triggerPad = vi.spyOn(useMPCStore.getState(), "triggerPad");
     act(() => {
       capturedHandlers.onEvent?.({ type: "noteOn", padIdx: 3, velocity: 0.8 });
     });
-    expect(triggerPad).toHaveBeenCalledWith(3, 0.8);
+    // fromHardware=true so the store doesn't echo this trigger back out as MIDI.
+    expect(triggerPad).toHaveBeenCalledWith(3, 0.8, undefined, true);
   });
 
-  it("onEvent noteOff → store.releasePad called with padIdx", () => {
+  it("onEvent noteOn from a different bank (padIdx=20) → store.setBank(1) called to follow hardware", () => {
+    renderHook(() => useMidiInput());
+    const setBank = vi.spyOn(useMPCStore.getState(), "setBank");
+    act(() => {
+      capturedHandlers.onEvent?.({ type: "noteOn", padIdx: 20, velocity: 0.8 });
+    });
+    expect(setBank).toHaveBeenCalledWith(1);
+  });
+
+  it("onEvent noteOn from the already-active bank → store.setBank not called", () => {
+    renderHook(() => useMidiInput());
+    // Default bankIdx is 0; padIdx 3 belongs to bank 0.
+    const setBank = vi.spyOn(useMPCStore.getState(), "setBank");
+    act(() => {
+      capturedHandlers.onEvent?.({ type: "noteOn", padIdx: 3, velocity: 0.8 });
+    });
+    expect(setBank).not.toHaveBeenCalled();
+  });
+
+  it("onEvent noteOff → store.releasePad called with padIdx, fromHardware=true", () => {
     renderHook(() => useMidiInput());
     const releasePad = vi.spyOn(useMPCStore.getState(), "releasePad");
     act(() => {
       capturedHandlers.onEvent?.({ type: "noteOff", padIdx: 5 });
     });
-    expect(releasePad).toHaveBeenCalledWith(5);
+    expect(releasePad).toHaveBeenCalledWith(5, true);
   });
 
   it("onEvent cc controller=1 → store.setKnob('k1', value)", () => {
@@ -167,5 +188,14 @@ describe("useMidiInput", () => {
   it("MidiInput constructor is called exactly once on mount", () => {
     renderHook(() => useMidiInput());
     expect(MidiInput).toHaveBeenCalledTimes(1);
+  });
+
+  it("registers the MidiInput instance as the store's midiOutRef on mount, clears it on unmount", () => {
+    const setMidiOut = vi.spyOn(useMPCStore.getState(), "setMidiOut");
+    const { unmount } = renderHook(() => useMidiInput());
+    expect(setMidiOut).toHaveBeenCalledWith(expect.objectContaining({ start: mockStart }));
+
+    unmount();
+    expect(setMidiOut).toHaveBeenLastCalledWith(null);
   });
 });

@@ -23,7 +23,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { desktop, isDesktop } from "../desktop/bridge";
 import { exportKitToDisk } from "../desktop/exportToDisk";
+import { useSequencerStore } from "../sequencer/sequencerStore";
 import { buildExportKit, useMPCStore } from "../state/store";
+import { hasActiveSteps } from "../xpj/buildSequence";
 import { type ExportProgress, exportKitToZip, triggerDownload } from "../xpj/exportKit";
 import "../styles/export.css";
 
@@ -70,6 +72,8 @@ export function ExportButton() {
   const dialogPosition = useMPCStore((s) => s.dialogPosition);
   const autoOpenExportFolder = useMPCStore((s) => s.autoOpenExportFolder);
   const unmountAfterExport = useMPCStore((s) => s.unmountAfterExport);
+  const sequencerPattern = useSequencerStore((s) => s.pattern);
+  const patternHasSteps = useMemo(() => hasActiveSteps(sequencerPattern), [sequencerPattern]);
 
   // Derive the kit to export from the live padMap (source of truth).
   // activeKit.pads is a one-time snapshot set by loadKit; padMap reflects all
@@ -85,6 +89,7 @@ export function ExportButton() {
   const [ejectPhase, setEjectPhase] = useState<"idle" | "ejecting" | "ejected" | "error">("idle");
   const [ejectError, setEjectError] = useState<string | null>(null);
   const [projectName, setProjectName] = useState("New Project");
+  const [includeSequence, setIncludeSequence] = useState(true);
 
   // In-dialog overwrite confirmation state (desktop only)
   const [overwriteConfirm, setOverwriteConfirm] = useState<{
@@ -115,6 +120,7 @@ export function ExportButton() {
     setEjectPhase("idle");
     setEjectError(null);
     setProjectName(exportKit?.exportName?.trim() || "New Project");
+    setIncludeSequence(true);
   }, [exportKit]);
 
   const closeDialog = useCallback(() => {
@@ -171,6 +177,8 @@ export function ExportButton() {
     // Apply the user-entered project name
     const namedKit = { ...exportKit, exportName: projectName.trim() || "New Project" };
 
+    const pattern = includeSequence && patternHasSteps ? sequencerPattern : undefined;
+
     const controller = new AbortController();
     abortRef.current = controller;
 
@@ -197,6 +205,7 @@ export function ExportButton() {
           signal: controller.signal,
           onProgress,
           onNeedOverwrite,
+          pattern,
         });
 
         if (!controller.signal.aborted) {
@@ -227,6 +236,7 @@ export function ExportButton() {
         const result = await exportKitToZip(namedKit, userSamples, {
           signal: controller.signal,
           onProgress,
+          pattern,
         });
 
         if (!controller.signal.aborted) {
@@ -266,6 +276,9 @@ export function ExportButton() {
     autoOpenExportFolder,
     unmountAfterExport,
     projectName,
+    includeSequence,
+    patternHasSteps,
+    sequencerPattern,
   ]);
 
   const handleEject = useCallback(async () => {
@@ -351,6 +364,18 @@ export function ExportButton() {
                     spellCheck={false}
                   />
                 </div>
+              )}
+
+              {/* Include step-sequencer pattern — only offered when one exists */}
+              {!running && !succeeded && patternHasSteps && (
+                <label className="export-sequence-field">
+                  <input
+                    type="checkbox"
+                    checked={includeSequence}
+                    onChange={(e) => setIncludeSequence(e.target.checked)}
+                  />
+                  Include step sequencer pattern
+                </label>
               )}
 
               {/* aria-live region for screen reader announcements */}

@@ -66,6 +66,11 @@ let _isDesktop = false;
 
 vi.mock("../../desktop/bridge", () => ({
   isDesktop: () => _isDesktop,
+  // SampleBrowser (rendered by App when isDesktop()) subscribes to library
+  // progress via desktop().onLibraryProgress — stub it so App can mount.
+  desktop: () => ({
+    onLibraryProgress: () => () => {},
+  }),
 }));
 
 // ---------------------------------------------------------------------------
@@ -90,6 +95,10 @@ vi.mock("../useKeyboardInput", () => ({
   useKeyboardInput: vi.fn(),
 }));
 
+vi.mock("../useSequencer", () => ({
+  useSequencer: vi.fn(),
+}));
+
 vi.mock("../../components/StartOverlay", () => ({
   StartOverlay: () => <div data-testid="start-overlay" />,
 }));
@@ -108,6 +117,18 @@ vi.mock("../../components/TweaksPanel", () => ({
 
 vi.mock("../../components/KitEditor", () => ({
   KitEditor: () => <div data-testid="kit-editor" />,
+}));
+
+vi.mock("../../components/EffectsRackPanel", () => ({
+  EffectsRackPanel: () => <div data-testid="effects-rack-panel" />,
+}));
+
+vi.mock("../../components/StepSequencer", () => ({
+  StepSequencer: () => <div data-testid="step-sequencer" />,
+}));
+
+vi.mock("../../components/SampleRecorder", () => ({
+  SampleRecorder: () => <div data-testid="sample-recorder" />,
 }));
 
 vi.mock("../../components/Launcher", () => ({

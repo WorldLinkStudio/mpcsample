@@ -9,6 +9,18 @@ export function UtilityButtons() {
   const setBpm = useMPCStore((s) => s.setBpm);
   const tapTimestamps = useRef<number[]>([]);
 
+  const handleOpenLibrary = useCallback(() => {
+    window.dispatchEvent(new Event("mpc:open-library"));
+  }, []);
+
+  const handleOpenSequencer = useCallback(() => {
+    window.dispatchEvent(new Event("mpc:open-sequencer"));
+  }, []);
+
+  const handleOpenSampleRecorder = useCallback(() => {
+    window.dispatchEvent(new Event("mpc:open-sample-recorder"));
+  }, []);
+
   const handleTapTempo = useCallback(() => {
     const now = Date.now();
     const taps = tapTimestamps.current;
@@ -34,7 +46,12 @@ export function UtilityButtons() {
     <>
       <div className="right-mid">
         <div className="btn-stack">
-          <button type="button" className="btn">
+          <button
+            type="button"
+            className="btn"
+            aria-label="Open sample library"
+            onClick={handleOpenLibrary}
+          >
             SAMPLE
             <br />
             SELECT
@@ -68,7 +85,12 @@ export function UtilityButtons() {
 
       <div className="rec-row">
         <div className="btn-stack">
-          <button type="button" className="btn">
+          <button
+            type="button"
+            className="btn"
+            aria-label="Open sample recorder"
+            onClick={handleOpenSampleRecorder}
+          >
             SAMPLE
             <br />
             RECORD
@@ -76,7 +98,12 @@ export function UtilityButtons() {
           <div className="lbl">RECALL</div>
         </div>
         <div className="btn-stack">
-          <button type="button" className="btn">
+          <button
+            type="button"
+            className="btn"
+            aria-label="Open step sequencer"
+            onClick={handleOpenSequencer}
+          >
             SEQ
             <br />
             RECORD

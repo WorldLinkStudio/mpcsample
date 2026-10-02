@@ -3,7 +3,7 @@
 // computed keys ({ [12]: ... }) mirror global pad indices for fixture clarity.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SampleKit, SamplePad } from "../../kits/kit.types";
-import type { AudioEngineLike } from "../../types/mpc.types";
+import type { AudioEngineLike, MidiOutputLike } from "../../types/mpc.types";
 import { _cancelAllReleaseTimers, buildExportKit, useMPCStore } from "../store";
 
 // ── Mock engine factory ────────────────────────────────────────────────────────
@@ -31,6 +31,14 @@ function makeEngine(): AudioEngineLike {
     isPadLoading: vi.fn(() => false),
     prefetchAll: vi.fn(() => Promise.resolve()),
     registerImportedSample: vi.fn(() => Promise.resolve()),
+  };
+}
+
+function makeMidiOut(): MidiOutputLike {
+  return {
+    hasOutput: vi.fn(() => true),
+    sendNoteOn: vi.fn(() => {}),
+    sendNoteOff: vi.fn(() => {}),
   };
 }
 
@@ -80,6 +88,7 @@ beforeEach(() => {
     isExporting: false,
     exportProgress: null,
     engineRef: null,
+    midiOutRef: null,
     bpm: 120,
     fader: 0.5,
     pads: Object.fromEntries(Array.from({ length: 128 }, (_, i) => [i, "armed"])) as Record<
@@ -641,6 +650,25 @@ describe("triggerPad", () => {
     useMPCStore.getState().triggerPad(0);
     expect(engine.trigger).toHaveBeenCalledWith(0, 0.9, undefined);
   });
+
+  it("sends a MIDI Note On via midiOutRef by default", () => {
+    const midiOut = makeMidiOut();
+    useMPCStore.setState({ midiOutRef: midiOut });
+    useMPCStore.getState().triggerPad(4, 0.6);
+    expect(midiOut.sendNoteOn).toHaveBeenCalledWith(4, 0.6);
+  });
+
+  it("does NOT send MIDI out when fromHardware=true (avoids echoing back to the device)", () => {
+    const midiOut = makeMidiOut();
+    useMPCStore.setState({ midiOutRef: midiOut });
+    useMPCStore.getState().triggerPad(4, 0.6, undefined, true);
+    expect(midiOut.sendNoteOn).not.toHaveBeenCalled();
+  });
+
+  it("works without a registered midiOutRef (no-op, no throw)", () => {
+    useMPCStore.setState({ midiOutRef: null });
+    expect(() => useMPCStore.getState().triggerPad(0)).not.toThrow();
+  });
 });
 
 // ── pressPad / unpressPad ─────────────────────────────────────────────────────
@@ -677,6 +705,20 @@ describe("releasePad", () => {
     expect(useMPCStore.getState().pads[0]).toBe("armed");
     vi.useRealTimers();
   });
+
+  it("sends a MIDI Note Off via midiOutRef by default", () => {
+    const midiOut = makeMidiOut();
+    useMPCStore.setState({ midiOutRef: midiOut });
+    useMPCStore.getState().releasePad(4);
+    expect(midiOut.sendNoteOff).toHaveBeenCalledWith(4);
+  });
+
+  it("does NOT send MIDI out when fromHardware=true", () => {
+    const midiOut = makeMidiOut();
+    useMPCStore.setState({ midiOutRef: midiOut });
+    useMPCStore.getState().releasePad(4, true);
+    expect(midiOut.sendNoteOff).not.toHaveBeenCalled();
+  });
 });
 
 // ── setVisualizerMode ─────────────────────────────────────────────────────────
@@ -691,5 +733,36 @@ describe("setVisualizerMode", () => {
     useMPCStore.getState().setVisualizerMode("oscilloscope");
     useMPCStore.getState().setVisualizerMode("fft");
     expect(useMPCStore.getState().visualizerMode).toBe("fft");
+  });
+});
+
+// ── setHudVisible ────────────────────────────────────────────────────────────
+
+describe("setHudVisible", () => {
+  it("defaults to true", () => {
+    expect(useMPCStore.getState().hudVisible).toBe(true);
+  });
+
+  it("sets hudVisible to false", () => {
+    useMPCStore.getState().setHudVisible(false);
+    expect(useMPCStore.getState().hudVisible).toBe(false);
+  });
+
+  it("sets hudVisible back to true", () => {
+    useMPCStore.getState().setHudVisible(false);
+    useMPCStore.getState().setHudVisible(true);
+    expect(useMPCStore.getState().hudVisible).toBe(true);
+  });
+
+  it("does not clobber other persisted-setting fields when set", () => {
+    useMPCStore.getState().setVisualizerMode("fft");
+    useMPCStore.getState().setHudVisible(false);
+    expect(useMPCStore.getState().visualizerMode).toBe("fft");
+  });
+
+  it("is not clobbered by other persisted-setting setters", () => {
+    useMPCStore.getState().setHudVisible(false);
+    useMPCStore.getState().setVisualizerMode("oscilloscope");
+    expect(useMPCStore.getState().hudVisible).toBe(false);
   });
 });

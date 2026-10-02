@@ -5,6 +5,7 @@ import type {
   AudioEngineLike,
   KnobName,
   LedColor,
+  MidiOutputLike,
   MidiStatus,
   PadIndex,
   PadVisualState,
@@ -17,6 +18,7 @@ type PersistedSettings = {
   autoOpenExportFolder: boolean;
   unmountAfterExport: boolean;
   visualizerMode: "waveform" | "fft" | "oscilloscope";
+  hudVisible: boolean;
 };
 
 function readSettings(): PersistedSettings {
@@ -25,6 +27,7 @@ function readSettings(): PersistedSettings {
     autoOpenExportFolder: false,
     unmountAfterExport: false,
     visualizerMode: "waveform" as const,
+    hudVisible: true,
   };
   if (typeof window === "undefined") return defaults;
   try {
@@ -46,6 +49,7 @@ function readSettings(): PersistedSettings {
         new Set(["waveform", "fft", "oscilloscope"]).has(parsed.visualizerMode)
           ? (parsed.visualizerMode as PersistedSettings["visualizerMode"])
           : "waveform",
+      hudVisible: typeof parsed.hudVisible === "boolean" ? parsed.hudVisible : true,
     };
   } catch {
     return defaults;
@@ -188,6 +192,13 @@ type State = {
 
   engineRef: AudioEngineLike | null;
 
+  /**
+   * Registered MIDI output (implemented by `MidiInput`, which owns both
+   * directions of the shared `MIDIAccess`). `null` when MIDI hasn't started
+   * or the Web MIDI API is unavailable.
+   */
+  midiOutRef: MidiOutputLike | null;
+
   /** Zoom scale for the whole MPC device. Clamped to [0.5, 2]. Default 1. */
   uiScale: number;
 
@@ -206,6 +217,9 @@ type State = {
   /** Visualizer mode: static sample waveform (default), FFT spectrum, or oscilloscope. */
   visualizerMode: "waveform" | "fft" | "oscilloscope";
 
+  /** Whether the bottom-left HUD (shortcuts/status/toolbar) is shown. Default true. */
+  hudVisible: boolean;
+
   /** GlobalPadIdx of the most recently triggered pad; drives the waveform display. */
   lastTriggeredPad: PadIndex | null;
 };
@@ -213,6 +227,7 @@ type State = {
 type Actions = {
   setStarted: (v: boolean) => void;
   setEngine: (engine: AudioEngineLike | null) => void;
+  setMidiOut: (midiOut: MidiOutputLike | null) => void;
 
   /**
    * Stop all active audio immediately and reset all pad visual states.
@@ -220,10 +235,16 @@ type Actions = {
    */
   stopAll: () => void;
 
-  /** Trigger pad at `idx` (GlobalPadIdx, 0..127) with optional velocity. */
-  triggerPad: (idx: PadIndex, velocity?: number, time?: number) => void;
-  /** Schedule the visual release animation for `idx`. */
-  releasePad: (idx: PadIndex) => void;
+  /**
+   * Trigger pad at `idx` (GlobalPadIdx, 0..127) with optional velocity.
+   * Also sends a MIDI Note On to `midiOutRef` (if registered) so the
+   * physical MPC's pad triggers too — unless `fromHardware` is true, which
+   * `useMidiInput` sets for hardware-originated triggers to avoid echoing
+   * the note straight back to the device that just sent it.
+   */
+  triggerPad: (idx: PadIndex, velocity?: number, time?: number, fromHardware?: boolean) => void;
+  /** Schedule the visual release animation for `idx`. Also sends MIDI Note Off unless `fromHardware`. */
+  releasePad: (idx: PadIndex, fromHardware?: boolean) => void;
   /** Visual-only press (audio already scheduled by PatternPlayer). */
   pressPad: (idx: PadIndex) => void;
   /** Visual-only release, mirroring `pressPad`. */
@@ -341,6 +362,9 @@ type Actions = {
 
   /** Set the visualizer mode and persist to localStorage. */
   setVisualizerMode: (mode: "waveform" | "fft" | "oscilloscope") => void;
+
+  /** Show/hide the bottom-left HUD and persist to localStorage. */
+  setHudVisible: (v: boolean) => void;
 };
 
 /** Build a 128-entry visual-state record initialised to "armed". */
@@ -413,17 +437,21 @@ export const useMPCStore = create<State & Actions>((set, get) => ({
   isExporting: false,
   exportProgress: null,
   engineRef: null,
+  midiOutRef: null,
   uiScale: _uiTransformInit.uiScale,
   uiOffset: _uiTransformInit.uiOffset,
   dialogPosition: _settingsInit.dialogPosition,
   autoOpenExportFolder: _settingsInit.autoOpenExportFolder,
   unmountAfterExport: _settingsInit.unmountAfterExport,
   visualizerMode: _settingsInit.visualizerMode,
+  hudVisible: _settingsInit.hudVisible,
   lastTriggeredPad: null,
 
   setStarted: (v) => set({ isStarted: v }),
 
   setEngine: (engine) => set({ engineRef: engine }),
+
+  setMidiOut: (midiOut) => set({ midiOutRef: midiOut }),
 
   stopAll: () => {
     _cancelAllReleaseTimers();
@@ -431,7 +459,7 @@ export const useMPCStore = create<State & Actions>((set, get) => ({
     set({ pads: buildInitialPads() });
   },
 
-  triggerPad: (idx, velocity = 0.9, time) => {
+  triggerPad: (idx, velocity = 0.9, time, fromHardware = false) => {
     // Cancel any pending release for this pad — prevents a stale timer from
     // flipping the new press back to 'armed' before the user releases.
     const existing = releaseTimers.get(idx);
@@ -439,12 +467,13 @@ export const useMPCStore = create<State & Actions>((set, get) => ({
       clearTimeout(existing);
       releaseTimers.delete(idx);
     }
-    const { engineRef, pads } = get();
+    const { engineRef, midiOutRef, pads } = get();
     set({ pads: { ...pads, [idx]: "press" }, lastTriggeredPad: idx });
     engineRef?.trigger(idx, velocity, time);
+    if (!fromHardware) midiOutRef?.sendNoteOn(idx, velocity);
   },
 
-  releasePad: (idx) => {
+  releasePad: (idx, fromHardware = false) => {
     // Replace any pending release timer to bound the queue size to 128.
     const existing = releaseTimers.get(idx);
     if (existing !== undefined) clearTimeout(existing);
@@ -453,6 +482,7 @@ export const useMPCStore = create<State & Actions>((set, get) => ({
       set((state) => ({ pads: { ...state.pads, [idx]: "armed" } }));
     }, RELEASE_DELAY_MS);
     releaseTimers.set(idx, id);
+    if (!fromHardware) get().midiOutRef?.sendNoteOff(idx);
   },
 
   pressPad: (idx) => {
@@ -703,37 +733,63 @@ export const useMPCStore = create<State & Actions>((set, get) => ({
   },
 
   setDialogPosition: (pos) => {
-    const { autoOpenExportFolder, unmountAfterExport, visualizerMode } = get();
+    const { autoOpenExportFolder, unmountAfterExport, visualizerMode, hudVisible } = get();
     writeSettings({
       dialogPosition: pos,
       autoOpenExportFolder,
       unmountAfterExport,
       visualizerMode,
+      hudVisible,
     });
     set({ dialogPosition: pos });
   },
 
   setAutoOpenExportFolder: (v) => {
-    const { dialogPosition, unmountAfterExport, visualizerMode } = get();
-    writeSettings({ dialogPosition, autoOpenExportFolder: v, unmountAfterExport, visualizerMode });
+    const { dialogPosition, unmountAfterExport, visualizerMode, hudVisible } = get();
+    writeSettings({
+      dialogPosition,
+      autoOpenExportFolder: v,
+      unmountAfterExport,
+      visualizerMode,
+      hudVisible,
+    });
     set({ autoOpenExportFolder: v });
   },
 
   setUnmountAfterExport: (v) => {
-    const { dialogPosition, autoOpenExportFolder, visualizerMode } = get();
-    writeSettings({ dialogPosition, autoOpenExportFolder, unmountAfterExport: v, visualizerMode });
+    const { dialogPosition, autoOpenExportFolder, visualizerMode, hudVisible } = get();
+    writeSettings({
+      dialogPosition,
+      autoOpenExportFolder,
+      unmountAfterExport: v,
+      visualizerMode,
+      hudVisible,
+    });
     set({ unmountAfterExport: v });
   },
 
   setVisualizerMode: (mode) => {
-    const { dialogPosition, autoOpenExportFolder, unmountAfterExport } = get();
+    const { dialogPosition, autoOpenExportFolder, unmountAfterExport, hudVisible } = get();
     writeSettings({
       dialogPosition,
       autoOpenExportFolder,
       unmountAfterExport,
       visualizerMode: mode,
+      hudVisible,
     });
     set({ visualizerMode: mode });
+  },
+
+  setHudVisible: (v) => {
+    const { dialogPosition, autoOpenExportFolder, unmountAfterExport, visualizerMode } = get();
+    writeSettings({
+      dialogPosition,
+      autoOpenExportFolder,
+      unmountAfterExport,
+      visualizerMode,
+      hudVisible: v,
+    });
+    set({ hudVisible: v });
   },
 }));
 

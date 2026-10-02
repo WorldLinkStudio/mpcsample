@@ -13,6 +13,14 @@ export const CH = {
   writeProject: "mpc:writeProject",
   ejectVolume: "mpc:ejectVolume",
   openPath: "mpc:openPath",
+  chooseLibraryDir: "mpc:chooseLibraryDir",
+  scanLibrary: "mpc:scanLibrary",
+  cancelLibraryScan: "mpc:cancelLibraryScan",
+  getLibraryTags: "mpc:getLibraryTags",
+  setSampleTags: "mpc:setSampleTags",
 } as const;
+
+/** Renderer-bound event (not request/response) carrying incremental scan progress. */
+export const LIBRARY_PROGRESS_EVENT = "mpc:libraryProgress";
 
 export type IpcResult<T> = { ok: true; result: T } | { ok: false; error: DesktopError };

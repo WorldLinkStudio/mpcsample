@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 import { buildUserSamplePad, importWavFile } from "../kits/importWav";
 import type { GlobalPadIdx, SamplePad } from "../kits/kit.types";
+import { buildLibrarySamplePad } from "../library/buildLibrarySamplePad";
+import { isLibraryDragPayload, LIBRARY_DRAG_MIME } from "../library/library.types";
 import { useMPCStore } from "../state/store";
 import type { PadDefinition } from "../types/mpc.types";
 
@@ -164,8 +166,7 @@ export function Pad({
       const rawIdx = padEl?.getAttribute("data-pad-idx");
       const targetIdx = rawIdx != null ? parseInt(rawIdx, 10) : NaN;
       // Don't highlight the source pad as a drop target.
-      const validTarget =
-        !Number.isNaN(targetIdx) && targetIdx !== globalIdx ? padEl : null;
+      const validTarget = !Number.isNaN(targetIdx) && targetIdx !== globalIdx ? padEl : null;
 
       if (validTarget !== swapTargetRef.current) {
         clearSwapTarget();
@@ -264,15 +265,22 @@ export function Pad({
   );
 
   const handleDragOver = useCallback((e: React.DragEvent<HTMLButtonElement>) => {
-    // Only respond to file drags; ignore internal element drags.
-    if (e.dataTransfer.types.includes("Files")) {
+    // Respond to OS file drags and internal Sample Browser drags; ignore
+    // other internal element drags (e.g. pad-to-pad pointer drags).
+    if (
+      e.dataTransfer.types.includes("Files") ||
+      e.dataTransfer.types.includes(LIBRARY_DRAG_MIME)
+    ) {
       e.preventDefault();
       setIsDragOver(true);
     }
   }, []);
 
   const handleDragEnter = useCallback((e: React.DragEvent<HTMLButtonElement>) => {
-    if (e.dataTransfer.types.includes("Files")) {
+    if (
+      e.dataTransfer.types.includes("Files") ||
+      e.dataTransfer.types.includes(LIBRARY_DRAG_MIME)
+    ) {
       e.preventDefault();
       setIsDragOver(true);
     }
@@ -288,7 +296,25 @@ export function Pad({
       setIsDragOver(false);
 
       const files = Array.from(e.dataTransfer.files);
-      if (files.length === 0) return;
+
+      if (files.length === 0) {
+        // Not an OS file drop — check for a Sample Browser internal drag.
+        // getData() must be read synchronously within the drop handler.
+        const raw =
+          typeof e.dataTransfer.getData === "function"
+            ? e.dataTransfer.getData(LIBRARY_DRAG_MIME)
+            : "";
+        if (!raw) return;
+        try {
+          const payload: unknown = JSON.parse(raw);
+          if (!isLibraryDragPayload(payload)) return;
+          setPadSample(globalIdx, buildLibrarySamplePad(globalIdx, payload));
+          clearDropError();
+        } catch (err) {
+          showDropError(err instanceof Error ? err.message : "Failed to assign library sample.");
+        }
+        return;
+      }
 
       // Capture mutable store refs at drop time so async continuation uses
       // the engine that is live when the drop fires (not a stale closure).

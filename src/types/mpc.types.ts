@@ -155,6 +155,21 @@ export interface AudioEngineLike {
   stopAll?(): void;
 }
 
+/**
+ * Capability contract for sending pad triggers back out over MIDI (e.g. to
+ * make the physical MPC Sample's pads light up/sound when a pad is triggered
+ * from this app's UI). Implemented by `MidiInput` (which owns the shared
+ * `MIDIAccess` object and so has both directions).
+ */
+export interface MidiOutputLike {
+  /** True if at least one MIDI output port is currently available. */
+  hasOutput(): boolean;
+  /** Send a Note On for `padIdx` (GlobalPadIdx, 0..127) at velocity 0..1. No-op if unrepresentable (padIdx > 91, note > 127) or no output is connected. */
+  sendNoteOn(padIdx: PadIndex, velocity: number): void;
+  /** Send a Note Off for `padIdx` (GlobalPadIdx, 0..127). */
+  sendNoteOff(padIdx: PadIndex): void;
+}
+
 export type MidiEvent =
   | {
       type: "noteOn";

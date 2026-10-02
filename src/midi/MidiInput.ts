@@ -1,10 +1,12 @@
-import { useMPCStore } from "../state/store";
-import type { MidiEvent, MidiStatus, PadIndex } from "../types/mpc.types";
+import type { MidiEvent, MidiOutputLike, MidiStatus, PadIndex } from "../types/mpc.types";
 
 export type MidiHandlers = {
   onEvent?: (event: MidiEvent) => void;
   onStatusChange?: (status: MidiStatus, deviceName: string | null) => void;
 };
+
+/** MIDI note number for GlobalPadIdx 0 (Bank A, pad 1). */
+const NOTE_BASE = 36;
 
 /**
  * Wraps the Web MIDI API with defensive handling for:
@@ -13,17 +15,26 @@ export type MidiHandlers = {
  * - No devices connected → 'no-devices'
  * - Hot-plug / hot-unplug via onstatechange
  *
- * MIDI note mapping (standard Akai MPC convention):
- *   Notes 36–51 → local pad indices 0–15 within the ACTIVE bank.
- *   Global pad index = bankIdx * 16 + (note - 36).
- *   bankIdx is read from the store at event time so switching banks in the
- *   UI is immediately reflected for incoming MIDI.
+ * MIDI note mapping (verified against a real MPC Sample, "Pad MIDI Out: Always"):
+ *   The hardware shifts the outgoing note number by 16 per physical pad
+ *   bank — Bank A = notes 36–51, Bank B = 52–67, Bank C = 68–83, etc. — so
+ *   the bank is encoded in the note itself; global pad index = note - 36
+ *   directly (0..127), independent of whatever bank is selected in this
+ *   app's own UI. (MIDI notes cap at 127, so only banks A–E are fully
+ *   addressable this way — 116..127 covers bank F pads 1–12 only; higher
+ *   banks/pads have not been observed and may use a different mechanism.)
+ *
+ * Also implements {@link MidiOutputLike} to send pad triggers back out to
+ * the same device(s) — e.g. so a pad clicked in this app's UI also triggers
+ * the physical MPC Sample's pad (requires "Pad MIDI In: On" on the hardware).
+ * Reuses the single `MIDIAccess` object rather than requesting a second one.
  */
-export class MidiInput {
+export class MidiInput implements MidiOutputLike {
   private access: MIDIAccess | null = null;
   private handlers: MidiHandlers = {};
   private boundOnMessage: (e: MIDIMessageEvent) => void;
   private status: MidiStatus = "idle";
+  private outputs: MIDIOutput[] = [];
 
   constructor(handlers?: MidiHandlers) {
     this.handlers = handlers ?? {};
@@ -60,11 +71,19 @@ export class MidiInput {
     });
     this.access.onstatechange = null;
     this.access = null;
+    this.outputs = [];
     this.setStatus("idle", null);
   }
 
   private bindInputs(): void {
     if (!this.access) return;
+
+    const outputs: MIDIOutput[] = [];
+    this.access.outputs.forEach((out) => {
+      outputs.push(out);
+    });
+    this.outputs = outputs;
+
     const inputs: MIDIInput[] = [];
     this.access.inputs.forEach((inp) => {
       inputs.push(inp);
@@ -77,6 +96,35 @@ export class MidiInput {
       inp.onmidimessage = this.boundOnMessage;
     });
     this.setStatus("connected", inputs[0].name ?? "Unknown");
+  }
+
+  // ── MidiOutputLike ─────────────────────────────────────────────────────
+
+  hasOutput(): boolean {
+    return this.outputs.length > 0;
+  }
+
+  sendNoteOn(padIdx: PadIndex, velocity: number): void {
+    const note = padIdx + NOTE_BASE;
+    if (note < 0 || note > 127) return;
+    const vel = Math.max(1, Math.min(127, Math.round(velocity * 127)));
+    this.send([0x90, note, vel]);
+  }
+
+  sendNoteOff(padIdx: PadIndex): void {
+    const note = padIdx + NOTE_BASE;
+    if (note < 0 || note > 127) return;
+    this.send([0x80, note, 0]);
+  }
+
+  private send(bytes: number[]): void {
+    for (const out of this.outputs) {
+      try {
+        out.send(bytes);
+      } catch {
+        // Device may have disconnected between the hot-plug check and send.
+      }
+    }
   }
 
   private setStatus(status: MidiStatus, deviceName: string | null): void {
@@ -98,26 +146,23 @@ export class MidiInput {
     const cmd = statusByte & 0xf0;
 
     if (cmd === 0x90 && vel > 0) {
-      // Note On with velocity — map to global pad index using active bank.
-      const localIdx = note - 36;
-      if (localIdx >= 0 && localIdx < 16) {
-        const bankIdx = useMPCStore.getState().bankIdx;
-        const globalIdx = (bankIdx * 16 + localIdx) as PadIndex;
+      // Note On with velocity — the note already encodes both bank and local
+      // pad (see class doc comment), so it maps directly to a global index.
+      const globalPad = note - NOTE_BASE;
+      if (globalPad >= 0 && globalPad < 128) {
         this.handlers.onEvent?.({
           type: "noteOn",
-          padIdx: globalIdx,
+          padIdx: globalPad as PadIndex,
           velocity: vel / 127,
         });
       }
     } else if (cmd === 0x80 || (cmd === 0x90 && vel === 0)) {
       // Note Off (0x80) or Note On with vel=0 (running status note-off).
-      const localIdx = note - 36;
-      if (localIdx >= 0 && localIdx < 16) {
-        const bankIdx = useMPCStore.getState().bankIdx;
-        const globalIdx = (bankIdx * 16 + localIdx) as PadIndex;
+      const globalPad = note - NOTE_BASE;
+      if (globalPad >= 0 && globalPad < 128) {
         this.handlers.onEvent?.({
           type: "noteOff",
-          padIdx: globalIdx,
+          padIdx: globalPad as PadIndex,
         });
       }
     } else if (cmd === 0xb0) {

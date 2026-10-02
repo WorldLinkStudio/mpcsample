@@ -66,6 +66,48 @@ export type LoadedProject = {
   samples: { fileName: string; bytes: Uint8Array }[];
 };
 
+/** Plain filesystem facts about one audio file found under a scanned library root. */
+export type LibraryFileStat = {
+  /** Path relative to the scanned root, forward-slash separated. */
+  relPath: string;
+  /** Absolute path on disk. */
+  absPath: string;
+  /** File name only, e.g. "Kick 808.wav". */
+  fileName: string;
+  sizeBytes: number;
+  mtimeMs: number;
+};
+
+/** Decoded audio metadata for a library file — arrives asynchronously after the initial scan. */
+export type LibrarySampleMeta = {
+  durationSec: number;
+  sampleRate: number;
+  channels: number;
+  bitDepth: number;
+  /** Interleaved [min, max] pairs per bucket, or `null` if not (yet) computed. */
+  peaks: number[] | null;
+};
+
+/** One row in the Sample Browser: file facts plus whatever decoded meta is available so far. */
+export type LibraryEntry = LibraryFileStat & Partial<LibrarySampleMeta>;
+
+/**
+ * Incremental update pushed from main → renderer while a library scan's
+ * background decode pool works through cache-miss files.
+ *
+ * `done: true` marks the end of the scan (no `relPath`/`meta` on that event).
+ */
+export type LibraryProgressUpdate =
+  | { done: false; relPath: string; meta: LibrarySampleMeta }
+  | { done: true };
+
+/**
+ * Manually-added/removed tags for a scanned root, keyed by relPath.
+ * Deliberately separate from decoded metadata — user edits, not derived file
+ * facts, so they survive a rescan even when a file's decoded peaks change.
+ */
+export type LibraryTags = Record<string, string[]>;
+
 /** Error codes a rejected desktop promise can carry on `.code`. */
 export type DesktopErrorCode =
   | "CANCELLED" // user cancelled a dialog
@@ -104,6 +146,26 @@ export type MpcDesktop = {
   ejectVolume(): Promise<void>;
   /** Open a directory or file in the system file manager (Finder on macOS). */
   openPath(dir: string): Promise<void>;
+
+  /** Open a native directory picker for choosing a sample library folder. Returns null if cancelled. */
+  chooseLibraryDir(): Promise<string | null>;
+  /**
+   * Scan `rootDir` for audio files. Resolves quickly with the full file list
+   * (cached metadata already merged in where available); files needing
+   * decode are then reported incrementally via {@link onLibraryProgress}.
+   */
+  scanLibrary(rootDir: string): Promise<LibraryEntry[]>;
+  /** Stop any in-flight background decode work for the current scan. */
+  cancelLibraryScan(): Promise<void>;
+  /**
+   * Subscribe to incremental decode results for the most recent `scanLibrary`
+   * call. Returns an unsubscribe function.
+   */
+  onLibraryProgress(cb: (update: LibraryProgressUpdate) => void): () => void;
+  /** Read all manually-added tags for `rootDir`, keyed by relPath. */
+  getLibraryTags(rootDir: string): Promise<LibraryTags>;
+  /** Replace the manual tag list for one sample and persist it. */
+  setSampleTags(rootDir: string, relPath: string, tags: string[]): Promise<void>;
 };
 
 declare global {

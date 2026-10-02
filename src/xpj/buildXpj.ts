@@ -16,6 +16,8 @@
  */
 
 import type { SampleKit, SamplePad } from "../kits/kit.types";
+import type { Pattern } from "../sequencer/sequencer.types";
+import { injectSequencePattern } from "./buildSequence";
 import { encodeXpj, floatTag, type XpjData } from "./codec";
 import { floatNum } from "./jsonLossless";
 
@@ -275,11 +277,17 @@ export function makeSampleEntry(pad: SamplePad, kit: Pick<SampleKit, "bpm" | "ke
  *
  * @throws {Error} If any `pad.fileName` is absent from `padBytes`.
  * @throws {RangeError} If any `pad.globalPadIdx` is outside 0–127.
+ *
+ * @param pattern - Optional step-sequencer pattern. When it has at least one
+ *   active step, it's written into the project's native sequence data (see
+ *   `injectSequencePattern` in `./buildSequence.ts`) so it shows up as a real,
+ *   editable sequence on the hardware — not just an in-app playback aid.
  */
 export function buildXpj(
   template: XpjData,
   kit: SampleKit,
   padBytes: Map<string, Uint8Array>,
+  pattern?: Pattern,
 ): BuiltXpj {
   const data = structuredClone(template) as XpjData;
 
@@ -316,8 +324,13 @@ export function buildXpj(
   track.samples = sampleList;
 
   // Step 4: Set track name and project key.
+  const originalTrackName = track.name as string;
   track.name = kit.exportName;
   dataRoot.key = kit.key;
+
+  if (pattern) {
+    injectSequencePattern(data, pattern, originalTrackName, kit.exportName, kit.bpm);
+  }
 
   // Step 5: Collect sample file bytes (de-duped by path, same order as sampleList).
   const sampleFiles: Array<{ path: string; bytes: Uint8Array }> = [];

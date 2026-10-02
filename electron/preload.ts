@@ -16,13 +16,16 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   DefaultExportDir,
   DesktopError,
+  LibraryEntry,
+  LibraryProgressUpdate,
+  LibraryTags,
   LoadedProject,
   MpcDesktop,
   WriteProjectArgs,
   WriteProjectResult,
 } from "../src/desktop/bridge.types";
 import type { IpcResult } from "./ipc";
-import { CH } from "./ipc";
+import { CH, LIBRARY_PROGRESS_EVENT } from "./ipc";
 
 /** Unwrap an IpcResult — throws a typed Error on `ok: false`. */
 async function unwrap<T>(promise: Promise<IpcResult<T>>): Promise<T> {
@@ -79,6 +82,40 @@ const mpcDesktop: MpcDesktop = {
 
   openPath(dir: string): Promise<void> {
     return unwrap<void>(ipcRenderer.invoke(CH.openPath, dir) as Promise<IpcResult<void>>);
+  },
+
+  chooseLibraryDir(): Promise<string | null> {
+    return unwrap<string | null>(
+      ipcRenderer.invoke(CH.chooseLibraryDir) as Promise<IpcResult<string | null>>,
+    );
+  },
+
+  scanLibrary(rootDir: string): Promise<LibraryEntry[]> {
+    return unwrap<LibraryEntry[]>(
+      ipcRenderer.invoke(CH.scanLibrary, rootDir) as Promise<IpcResult<LibraryEntry[]>>,
+    );
+  },
+
+  cancelLibraryScan(): Promise<void> {
+    return unwrap<void>(ipcRenderer.invoke(CH.cancelLibraryScan) as Promise<IpcResult<void>>);
+  },
+
+  onLibraryProgress(cb: (update: LibraryProgressUpdate) => void): () => void {
+    const listener = (_event: unknown, update: LibraryProgressUpdate) => cb(update);
+    ipcRenderer.on(LIBRARY_PROGRESS_EVENT, listener);
+    return () => ipcRenderer.removeListener(LIBRARY_PROGRESS_EVENT, listener);
+  },
+
+  getLibraryTags(rootDir: string): Promise<LibraryTags> {
+    return unwrap<LibraryTags>(
+      ipcRenderer.invoke(CH.getLibraryTags, rootDir) as Promise<IpcResult<LibraryTags>>,
+    );
+  },
+
+  setSampleTags(rootDir: string, relPath: string, tags: string[]): Promise<void> {
+    return unwrap<void>(
+      ipcRenderer.invoke(CH.setSampleTags, rootDir, relPath, tags) as Promise<IpcResult<void>>,
+    );
   },
 };
 

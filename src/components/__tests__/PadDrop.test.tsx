@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PADS } from "../../data/padLayout";
 import { _resetImportCounter } from "../../kits/importWav";
 import type { GlobalPadIdx } from "../../kits/kit.types";
+import { LIBRARY_DRAG_MIME } from "../../library/library.types";
 import { useMPCStore } from "../../state/store";
 import { Pad } from "../Pad";
 
@@ -364,6 +365,63 @@ describe("Pad — non-WAV drop", () => {
       });
     });
     expect(btn.className).not.toContain("pad--drop-target");
+  });
+});
+
+// ── Sample Browser internal drag (library MIME payload) ──────────────────────
+
+describe("Pad — Sample Browser library drag-drop", () => {
+  it("adds pad--drop-target class on dragOver carrying the library MIME type", () => {
+    const { container } = renderPadWithSpiesNoEngine(0 as GlobalPadIdx);
+    const btn = container.querySelector("button")!;
+    fireEvent.dragOver(btn, { dataTransfer: { types: [LIBRARY_DRAG_MIME], files: [] } });
+    expect(btn.className).toContain("pad--drop-target");
+  });
+
+  it("assigns a library-backed SamplePad via setPadSample without touching registerUserSample", () => {
+    const { container, setPadSample, registerUserSample } = renderPadWithSpiesNoEngine(
+      3 as GlobalPadIdx,
+    );
+    const btn = container.querySelector("button")!;
+    const payload = {
+      absPath: "/Library/Kicks/808.wav",
+      relPath: "Kicks/808.wav",
+      fileName: "808.wav",
+    };
+
+    fireEvent.drop(btn, {
+      dataTransfer: {
+        files: [],
+        types: [LIBRARY_DRAG_MIME],
+        getData: (type: string) => (type === LIBRARY_DRAG_MIME ? JSON.stringify(payload) : ""),
+      },
+    });
+
+    expect(registerUserSample).not.toHaveBeenCalled();
+    expect(setPadSample).toHaveBeenCalledOnce();
+    const [idx, pad] = setPadSample.mock.calls[0] as [
+      number,
+      { url: string | null; fileName: string },
+    ];
+    expect(idx).toBe(3);
+    expect(pad.fileName).toBe("808.wav");
+    expect(pad.url).toBe(`mpc-sample://local/read?path=${encodeURIComponent(payload.absPath)}`);
+  });
+
+  it("shows an error alert and does not assign when the drag payload is malformed", () => {
+    const { container, setPadSample } = renderPadWithSpiesNoEngine(0 as GlobalPadIdx);
+    const btn = container.querySelector("button")!;
+
+    fireEvent.drop(btn, {
+      dataTransfer: {
+        files: [],
+        types: [LIBRARY_DRAG_MIME],
+        getData: (type: string) => (type === LIBRARY_DRAG_MIME ? "not json" : ""),
+      },
+    });
+
+    expect(setPadSample).not.toHaveBeenCalled();
+    expect(container.querySelector("[role='alert']")).toBeInTheDocument();
   });
 });
 

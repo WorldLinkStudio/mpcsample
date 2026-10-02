@@ -39,6 +39,8 @@ export function HUD() {
   const zoomBy = useMPCStore((s) => s.zoomBy);
   const resetUiTransform = useMPCStore((s) => s.resetUiTransform);
   const setUiScale = useMPCStore((s) => s.setUiScale);
+  const hudVisible = useMPCStore((s) => s.hudVisible);
+  const setHudVisible = useMPCStore((s) => s.setHudVisible);
 
   const [isLoadingKit, setIsLoadingKit] = useState(false);
 
@@ -104,6 +106,19 @@ export function HUD() {
       setIsLoadingKit(false);
     }
   };
+
+  if (!hudVisible) {
+    return (
+      <button
+        type="button"
+        className="hud-restore"
+        onClick={() => setHudVisible(true)}
+        aria-label="Show info panel"
+      >
+        ⌃
+      </button>
+    );
+  }
 
   const handleNewKit = () => {
     const blank: SampleKit = {
@@ -174,6 +189,14 @@ export function HUD() {
           style={HUD_BTN_STYLE}
         >
           ? HELP
+        </button>
+        <button
+          type="button"
+          onClick={() => setHudVisible(false)}
+          aria-label="Hide info panel"
+          style={HUD_BTN_STYLE}
+        >
+          ⌄ HIDE
         </button>
         <span
           style={{ width: "1px", height: "14px", background: "rgba(255,255,255,0.15)", alignSelf: "center" }}

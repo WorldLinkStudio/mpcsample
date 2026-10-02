@@ -104,6 +104,17 @@
   margin-bottom: 5px;
 }
 
+.export-sequence-field {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 14px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: #c7cede;
+  cursor: pointer;
+}
+
 .export-name-input {
   width: 100%;
   box-sizing: border-box;

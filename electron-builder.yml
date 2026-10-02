@@ -35,6 +35,14 @@ mac:
     - zip
   category: public.app-category.music
   identity: null
+  extendInfo:
+    NSScreenCaptureUsageDescription: "MPC Sample needs screen-recording access to capture audio from other apps (e.g. a browser tab, VLC, or Plex) when recording a sample."
+    # Recent Chromium's macOS audio-loopback capture also checks this key (a
+    # separate, newer permission from screen recording, tied to Apple's
+    # CoreAudio Tap API) — added defensively even though `disable-features:
+    # MacCatapLoopbackAudioForScreenShare` in electron/main.ts currently keeps
+    # capture on the older, NSScreenCaptureUsageDescription-gated path.
+    NSAudioCaptureUsageDescription: "MPC Sample needs audio-capture access to record audio from other apps (e.g. a browser tab, VLC, or Plex) when recording a sample."
 
 dmg:
   artifactName: ${productName}-${version}.${ext}

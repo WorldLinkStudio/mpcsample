@@ -14,6 +14,8 @@ import { BANK_LABELS, localToGlobal } from "../data/padLayout";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 import { buildUserSamplePad, importWavFile } from "../kits/importWav";
 import type { GlobalPadIdx } from "../kits/kit.types";
+import { buildLibrarySamplePad } from "../library/buildLibrarySamplePad";
+import { isLibraryDragPayload, LIBRARY_DRAG_MIME } from "../library/library.types";
 import { useMPCStore } from "../state/store";
 
 const FOCUSABLE_SELECTORS =
@@ -228,7 +230,20 @@ export function KitEditor() {
       setDropError("");
 
       const file = e.dataTransfer.files[0];
-      if (!file) return;
+      if (!file) {
+        // Not an OS file drop — check for a Sample Browser internal drag.
+        const raw = e.dataTransfer.getData(LIBRARY_DRAG_MIME);
+        if (!raw) return;
+        try {
+          const payload: unknown = JSON.parse(raw);
+          if (!isLibraryDragPayload(payload)) return;
+          setPadSample(globalIdx, buildLibrarySamplePad(globalIdx, payload));
+          setSelectedPad(globalIdx);
+        } catch (err) {
+          setDropError(err instanceof Error ? err.message : "Failed to assign library sample.");
+        }
+        return;
+      }
 
       try {
         const imported = await importWavFile(file);
@@ -454,6 +469,21 @@ export function KitEditor() {
                       {Math.round(selectedPadData.gainCoefficient * 100)}%
                     </span>
                   </div>
+                </div>
+
+                {/* Effects rack */}
+                <div className="ke-field">
+                  <button
+                    type="button"
+                    className="ke-move-btn"
+                    onClick={() =>
+                      window.dispatchEvent(
+                        new CustomEvent("mpc:open-effects", { detail: { padIdx: selectedPad } }),
+                      )
+                    }
+                  >
+                    Effects…
+                  </button>
                 </div>
 
                 {/* Move */}

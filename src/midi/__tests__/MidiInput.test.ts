@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MidiEvent, MidiStatus } from "../../types/mpc.types";
 import { MidiInput } from "../MidiInput";
 
@@ -12,6 +12,15 @@ type MockInput = {
   /** Helper: fire a raw MIDI message at this input */
   fire(data: number[]): void;
 };
+
+type MockOutput = {
+  name: string;
+  send: ReturnType<typeof vi.fn>;
+};
+
+function makeMockOutput(name: string): MockOutput {
+  return { name, send: vi.fn() };
+}
 
 function makeMockInput(name: string): MockInput {
   const inp: MockInput = {
@@ -31,15 +40,20 @@ function makeMockInput(name: string): MockInput {
 
 type MockMIDIAccess = {
   inputs: Map<string, MockInput>;
+  outputs: Map<string, MockOutput>;
   onstatechange: (() => void) | null;
 };
 
-function makeMockAccess(inputList: MockInput[]): MockMIDIAccess {
+function makeMockAccess(inputList: MockInput[], outputList: MockOutput[] = []): MockMIDIAccess {
   const inputs = new Map<string, MockInput>();
   inputList.forEach((inp, i) => {
     inputs.set(String(i), inp);
   });
-  return { inputs, onstatechange: null };
+  const outputs = new Map<string, MockOutput>();
+  outputList.forEach((out, i) => {
+    outputs.set(String(i), out);
+  });
+  return { inputs, outputs, onstatechange: null };
 }
 
 // Save / restore original navigator
@@ -215,20 +229,28 @@ describe("MidiInput — connected", () => {
     expect(events[0]).toMatchObject({ type: "cc", controller: 127, value: 1 });
   });
 
-  // ---- Out-of-range notes (no event) ---------------------------------
+  // ---- Below-range notes (no event) -----------------------------------
   it("Note On note=35 (below range) → no event emitted", () => {
     inputA.fire([0x90, 35, 100]);
-    expect(events).toHaveLength(0);
-  });
-
-  it("Note On note=52 (above range) → no event emitted", () => {
-    inputA.fire([0x90, 52, 100]);
     expect(events).toHaveLength(0);
   });
 
   it("Note Off note=35 (below range) → no event emitted", () => {
     inputA.fire([0x80, 35, 0]);
     expect(events).toHaveLength(0);
+  });
+
+  // ---- Higher banks (verified against real MPC Sample hardware): the
+  // note number is shifted by 16 per physical bank, so note=52 is Bank B's
+  // first pad (global index 16), not "out of range". ----------------------
+  it("Note On note=52 (Bank B pad 1) → noteOn padIdx=16", () => {
+    inputA.fire([0x90, 52, 100]);
+    expect(events).toEqual([{ type: "noteOn", padIdx: 16, velocity: 100 / 127 }]);
+  });
+
+  it("Note On note=127 (max MIDI note, Bank F pad 12) → noteOn padIdx=91", () => {
+    inputA.fire([0x90, 127, 100]);
+    expect(events).toEqual([{ type: "noteOn", padIdx: 91, velocity: 100 / 127 }]);
   });
 
   // ---- Malformed message (length < 2) --------------------------------
@@ -322,5 +344,82 @@ describe("MidiInput — onstatechange hot-plug", () => {
     access.inputs.set("0", newInput);
     access.onstatechange?.();
     expect(statuses[statuses.length - 1]).toBe("connected");
+  });
+});
+
+describe("MidiInput — MIDI output (MidiOutputLike)", () => {
+  it("hasOutput() is false with no output ports, true once one is present", async () => {
+    const noOutputAccess = makeMockAccess([makeMockInput("In")]);
+    setMidiAccess(noOutputAccess);
+    const midiNoOut = new MidiInput();
+    await midiNoOut.start();
+    expect(midiNoOut.hasOutput()).toBe(false);
+
+    const outputAccess = makeMockAccess([makeMockInput("In")], [makeMockOutput("Out")]);
+    setMidiAccess(outputAccess);
+    const midiWithOut = new MidiInput();
+    await midiWithOut.start();
+    expect(midiWithOut.hasOutput()).toBe(true);
+  });
+
+  it("sendNoteOn sends a Note On (0x90) with the note derived from padIdx + 36", async () => {
+    const out = makeMockOutput("Out");
+    setMidiAccess(makeMockAccess([makeMockInput("In")], [out]));
+    const midi = new MidiInput();
+    await midi.start();
+
+    midi.sendNoteOn(16, 0.5); // Bank B pad 1 → note 52
+    expect(out.send).toHaveBeenCalledWith([0x90, 52, Math.round(0.5 * 127)]);
+  });
+
+  it("sendNoteOff sends a Note Off (0x80) with velocity 0", async () => {
+    const out = makeMockOutput("Out");
+    setMidiAccess(makeMockAccess([makeMockInput("In")], [out]));
+    const midi = new MidiInput();
+    await midi.start();
+
+    midi.sendNoteOff(0); // Bank A pad 1 → note 36
+    expect(out.send).toHaveBeenCalledWith([0x80, 36, 0]);
+  });
+
+  it("sends to every connected output port", async () => {
+    const outA = makeMockOutput("A");
+    const outB = makeMockOutput("B");
+    setMidiAccess(makeMockAccess([makeMockInput("In")], [outA, outB]));
+    const midi = new MidiInput();
+    await midi.start();
+
+    midi.sendNoteOn(0, 1);
+    expect(outA.send).toHaveBeenCalledOnce();
+    expect(outB.send).toHaveBeenCalledOnce();
+  });
+
+  it("does not send a note that can't be represented (padIdx too high)", async () => {
+    const out = makeMockOutput("Out");
+    setMidiAccess(makeMockAccess([makeMockInput("In")], [out]));
+    const midi = new MidiInput();
+    await midi.start();
+
+    midi.sendNoteOn(127, 1); // note = 127 + 36 = 163, out of MIDI's 0-127 range
+    expect(out.send).not.toHaveBeenCalled();
+  });
+
+  it("clears outputs on stop() — hasOutput() becomes false", async () => {
+    const out = makeMockOutput("Out");
+    setMidiAccess(makeMockAccess([makeMockInput("In")], [out]));
+    const midi = new MidiInput();
+    await midi.start();
+    expect(midi.hasOutput()).toBe(true);
+
+    midi.stop();
+    expect(midi.hasOutput()).toBe(false);
+  });
+
+  it("sendNoteOn/sendNoteOff are no-ops (don't throw) with no output connected", async () => {
+    setMidiAccess(makeMockAccess([makeMockInput("In")]));
+    const midi = new MidiInput();
+    await midi.start();
+    expect(() => midi.sendNoteOn(0, 1)).not.toThrow();
+    expect(() => midi.sendNoteOff(0)).not.toThrow();
   });
 });
